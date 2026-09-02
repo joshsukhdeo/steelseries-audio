@@ -376,16 +376,19 @@ def cmd_status() -> None:
     desc = PRESETS.get(cur_prof, {}).get("description", "Custom curve")
     print(f"  Active DSP Preset:{C_MAGENTA}{C_BOLD} {cur_prof.capitalize()}{C_RESET} ({desc})")
 
-    _, info_out, _ = run_cmd(["wpctl", "status"])
+# Default sink check (Optimized)
+    _, inspect_out, _ = run_cmd(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"])
+    id_match = re.search(r"id:\s*(\d+)", inspect_out)
     def_sink = "Unknown"
-    for line in info_out.split("\n"):
-        if "*" in line and "Audio" not in line and "Video" not in line and "Sink" not in line:
-            if str(dsp_id) in line:
-                def_sink = f"{C_GREEN}{C_BOLD}SteelSeries Pro DSP Sink (Active){C_RESET}"
-            elif str(phys_id) in line:
-                def_sink = f"{C_CYAN}Direct {conn_type} Sink{C_RESET}"
-            break
 
+    if id_match:
+        active_id = int(id_match.group(1))
+        if dsp_id and active_id == dsp_id:
+            def_sink = f"{C_GREEN}{C_BOLD}SteelSeries Pro DSP Sink (Active){C_RESET}"
+        elif phys_id and active_id == phys_id:
+            def_sink = f"{C_CYAN}Direct {conn_type} Sink{C_RESET}"
+        else:
+            def_sink = f"{C_YELLOW}Other Device [Node: {active_id}]{C_RESET}"
     print(f"  System Default:   {def_sink}")
     print(f"=================================")
 
