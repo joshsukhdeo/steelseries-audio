@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# PYTHON_ARGCOMPLETE_OK
 """
 SteelSeries 7 (Arena 7) PipeWire & Bluetooth/USB Audio Optimizer
 Author: Antigravity / Refactored for Cross-Distro Native WirePlumber Policy
@@ -67,13 +66,6 @@ PRESETS = {
         "l_vocal": {"type": "bq_peaking", "freq": 2500.0, "q": 1.0, "gain": 0.0},
         "l_air": {"type": "bq_highshelf", "freq": 10000.0, "q": 1.0, "gain": 0.0},
     },
-    "heavy-rotation": {
-        "description": "Custom hybrid tuning for Math Metal, Phonk, and Aggressive Electro",
-        "l_sub": {"type": "bq_lowshelf", "freq": 55.0, "q": 0.85, "gain": 4.2},   # Thick 808s and sidechained electronic sub-bass
-        "l_mud": {"type": "bq_peaking", "freq": 240.0, "q": 1.4, "gain": -2.5},   # De-muds math-metal guitars and separates heavy bass lines
-        "l_vocal": {"type": "bq_peaking", "freq": 2600.0, "q": 1.2, "gain": 2.2}, # Brings vocals forward and gives 8-string guitar picking sharp texture
-        "l_air": {"type": "bq_highshelf", "freq": 11000.0, "q": 0.9, "gain": 1.8}, # Clean, crisp shimmer for synth leads, hats, and distorted phonk vocals
-    },
 }
 
 # ANSI colors
@@ -92,7 +84,7 @@ def check_dependencies() -> None:
     for cmd in required_cmds:
         if shutil.which(cmd) is None:
             missing.append(cmd)
-
+    
     if missing:
         print(f"{C_RED}Error: Missing required CLI tools: {', '.join(missing)}{C_RESET}")
         print(f"{C_YELLOW}Arch Linux:{C_RESET} sudo pacman -S wireplumber pipewire-pulse bluez-utils alsa-utils")
@@ -247,7 +239,7 @@ monitor.bluez.rules = [
     }
   },
   {
-    matches = [
+    matches = [ 
         { node.name = "~bluez_output.*", node.description = "~.*Arena 7.*" },
         { node.name = "~bluez_output.*", node.description = "~.*SteelSeries.*" }
     ]
@@ -277,7 +269,7 @@ def cmd_install(profile: str = "audiophile") -> None:
 
     cmd_restart()
     cmd_sbc_xq()
-
+    
     phys_id, _, _, dsp_id, _ = get_sinks()
     if dsp_id:
         cmd_set_default("dsp")
@@ -287,7 +279,8 @@ def cmd_install(profile: str = "audiophile") -> None:
 def cmd_restart() -> None:
     print(f"{C_CYAN}Restarting PipeWire & WirePlumber services...{C_RESET}")
     run_cmd(["systemctl", "--user", "restart", "pipewire", "wireplumber"])
-
+    
+    # Poll graph up to 5 seconds to prevent race conditions during DSP routing
     for _ in range(20):
         time.sleep(0.25)
         _, _, _, dsp_id, _ = get_sinks()
@@ -313,20 +306,14 @@ def cmd_profile(profile_name: str) -> None:
 
 def cmd_sbc_xq() -> None:
     print(f"{C_CYAN}Enforcing SBC-XQ High-Bitpool Bluetooth profile...{C_RESET}")
+    ret, cards_out, _ = run_cmd(["pactl", "list", "cards"])
     card_name = None
-
-    # Smart polling loop to handle BlueZ reconnection latency
-    for attempt in range(12):
-        ret, cards_out, _ = run_cmd(["pactl", "list", "cards"])
-        for block in cards_out.split("Card #"):
-            if ("Arena 7" in block or "SteelSeries" in block) and "bluez_card" in block:
-                match = re.search(r"Name:\s*(bluez_card\.[a-zA-Z0-9_]+)", block)
-                if match:
-                    card_name = match.group(1)
-                    break
-        if card_name:
-            break
-        time.sleep(0.5) # Wait 500ms before next poll
+    for block in cards_out.split("Card #"):
+        if ("Arena 7" in block or "SteelSeries" in block) and "bluez_card" in block:
+            match = re.search(r"Name:\s*(bluez_card\.[a-zA-Z0-9_]+)", block)
+            if match:
+                card_name = match.group(1)
+                break
 
     if card_name:
         ret, _, err = run_cmd(["pactl", "set-card-profile", card_name, "a2dp-sink-sbc_xq"])
@@ -335,7 +322,7 @@ def cmd_sbc_xq() -> None:
         else:
             print(f"  {C_YELLOW}Notice: {err}{C_RESET}")
     else:
-        print(f"  {C_YELLOW}Bluetooth card not detected after 6 seconds. Skipping BlueZ profile injection.{C_RESET}")
+        print(f"  {C_YELLOW}Bluetooth card not detected. Skipping BlueZ profile injection.{C_RESET}")
 
 
 def cmd_set_default(target: str) -> None:
@@ -345,14 +332,14 @@ def cmd_set_default(target: str) -> None:
         if not dsp_id:
             print(f"{C_RED}Error: DSP sink not found in PipeWire graph. Is it installed?{C_RESET}")
             sys.exit(1)
-
+            
         target_id = dsp_id
         display = "SteelSeries Arena 7 (Pro DSP Virtual Node)"
     elif target == "direct":
         if not phys_id:
             print(f"{C_RED}Error: Physical Arena 7 ({conn_type}) not found in PipeWire graph.{C_RESET}")
             sys.exit(1)
-
+            
         target_id = phys_id
         display = f"SteelSeries Arena 7 (Direct {conn_type})"
     else:
@@ -376,46 +363,6 @@ def cmd_test() -> None:
     print(f"  3. Testing 6.5\" Subwoofer Low-Frequency Resonance (55 Hz)...")
     run_cmd(["speaker-test", "-t", "sine", "-f", "55", "-c", "2", "-l", "1", "-P", "2"])
     print(f"{C_GREEN}{C_BOLD}✓ Channel test complete.{C_RESET}")
-
-
-def cmd_completions() -> None:
-    print(f"{C_CYAN}Installing native Bash completions...{C_RESET}")
-
-    profiles_str = " ".join(PRESETS.keys())
-    bash_script = f"""_steelseries_audio_complete() {{
-    local cur prev
-    cur="${{COMP_WORDS[COMP_CWORD]}}"
-    prev="${{COMP_WORDS[COMP_CWORD-1]}}"
-
-    case "${{prev}}" in
-        profile)
-            COMPREPLY=( $(compgen -W "{profiles_str}" -- "${{cur}}") )
-            return 0
-            ;;
-        set-default)
-            COMPREPLY=( $(compgen -W "dsp direct" -- "${{cur}}") )
-            return 0
-            ;;
-    esac
-
-    if [[ ${{COMP_CWORD}} -eq 1 ]]; then
-        COMPREPLY=( $(compgen -W "status install restart sbc-xq test profile set-default completions" -- "${{cur}}") )
-    fi
-    return 0
-}}
-complete -F _steelseries_audio_complete steelseries-audio
-"""
-
-    comp_dir = Path.home() / ".local" / "share" / "bash-completion" / "completions"
-    comp_dir.mkdir(parents=True, exist_ok=True)
-    comp_file = comp_dir / "steelseries-audio"
-
-    comp_file.write_text(bash_script)
-
-    print(f"  {C_GREEN}✓ Written:{C_RESET} {comp_file}")
-    print(f"{C_GREEN}{C_BOLD}Completions successfully deployed!{C_RESET}")
-    print(f"{C_YELLOW}Restart your terminal or run this command to activate them now:{C_RESET}")
-    print(f"  source {comp_file}")
 
 
 def cmd_status() -> None:
@@ -449,9 +396,9 @@ def cmd_status() -> None:
     desc = PRESETS.get(cur_prof, {}).get("description", "Custom curve")
     print(f"  Active DSP Preset:{C_MAGENTA}{C_BOLD} {cur_prof.capitalize()}{C_RESET} ({desc})")
 
+    # Native wpctl dynamic default sink inspection
     _, inspect_out, _ = run_cmd(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"])
-    # wpctl inspect outputs "id 43, type..." at the very top.
-    id_match = re.search(r"id\s+(\d+)", inspect_out)
+    id_match = re.search(r"id:\s*(\d+)", inspect_out)
     def_sink = "Unknown"
 
     if id_match:
@@ -469,7 +416,7 @@ def cmd_status() -> None:
 
 def main() -> None:
     check_dependencies()
-
+    
     parser = argparse.ArgumentParser(
         description="SteelSeries 7 (Arena 7) PipeWire Audio Suite",
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -481,19 +428,12 @@ def main() -> None:
     subparsers.add_parser("restart")
     subparsers.add_parser("sbc-xq")
     subparsers.add_parser("test")
-    subparsers.add_parser("completions")
 
     prof_parser = subparsers.add_parser("profile")
     prof_parser.add_argument("name", choices=list(PRESETS.keys()))
 
     def_parser = subparsers.add_parser("set-default")
     def_parser.add_argument("target", choices=["dsp", "direct"])
-
-    try:
-        import argcomplete
-        argcomplete.autocomplete(parser)
-    except ImportError:
-        pass
 
     args = parser.parse_args()
 
@@ -511,9 +451,8 @@ def main() -> None:
         cmd_set_default(args.target)
     elif args.command == "test":
         cmd_test()
-    elif args.command == "completions":
-        cmd_completions()
 
 
 if __name__ == "__main__":
     main()
+

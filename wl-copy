@@ -1,0 +1,14 @@
+● xdg-desktop-portal.service - Portal service
+     Loaded: loaded (/usr/lib/systemd/user/xdg-desktop-portal.service; static)
+     Active: active (running) since Wed 2026-09-02 15:52:58 EDT; 1min 7s ago
+ Invocation: 92c756ec174648a2b6f2b2014467ac65
+   Main PID: 3226664 (xdg-desktop-por)
+      Tasks: 5 (limit: 18175)
+     Memory: 5.3M (peak: 7.8M)
+        CPU: 57ms
+     CGroup: /user.slice/user-1000.slice/user@1000.service/session.slice/xdg-desktop-portal.service
+             └─3226664 /usr/lib/xdg-desktop-portal
+
+Sep 02 15:52:58 archzephyrus systemd[1644]: Starting Portal service...
+Sep 02 15:52:58 archzephyrus /usr/lib/xdg-desktop-portal[3226664]: Choosing gtk.portal for org.freedesktop.impl.portal.Lockdown as a last-resort fallback
+Sep 02 15:52:58 archzephyrus systemd[1644]: Started Portal service.
