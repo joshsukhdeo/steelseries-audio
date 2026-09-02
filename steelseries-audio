@@ -306,14 +306,20 @@ def cmd_profile(profile_name: str) -> None:
 
 def cmd_sbc_xq() -> None:
     print(f"{C_CYAN}Enforcing SBC-XQ High-Bitpool Bluetooth profile...{C_RESET}")
-    ret, cards_out, _ = run_cmd(["pactl", "list", "cards"])
     card_name = None
-    for block in cards_out.split("Card #"):
-        if ("Arena 7" in block or "SteelSeries" in block) and "bluez_card" in block:
-            match = re.search(r"Name:\s*(bluez_card\.[a-zA-Z0-9_]+)", block)
-            if match:
-                card_name = match.group(1)
-                break
+    
+    # Smart polling loop to handle BlueZ reconnection latency
+    for attempt in range(12):
+        ret, cards_out, _ = run_cmd(["pactl", "list", "cards"])
+        for block in cards_out.split("Card #"):
+            if ("Arena 7" in block or "SteelSeries" in block) and "bluez_card" in block:
+                match = re.search(r"Name:\s*(bluez_card\.[a-zA-Z0-9_]+)", block)
+                if match:
+                    card_name = match.group(1)
+                    break
+        if card_name:
+            break
+        time.sleep(0.5) # Wait 500ms before next poll
 
     if card_name:
         ret, _, err = run_cmd(["pactl", "set-card-profile", card_name, "a2dp-sink-sbc_xq"])
@@ -322,7 +328,7 @@ def cmd_sbc_xq() -> None:
         else:
             print(f"  {C_YELLOW}Notice: {err}{C_RESET}")
     else:
-        print(f"  {C_YELLOW}Bluetooth card not detected. Skipping BlueZ profile injection.{C_RESET}")
+        print(f"  {C_YELLOW}Bluetooth card not detected after 6 seconds. Skipping BlueZ profile injection.{C_RESET}")
 
 
 def cmd_set_default(target: str) -> None:
@@ -437,7 +443,8 @@ def cmd_status() -> None:
     print(f"  Active DSP Preset:{C_MAGENTA}{C_BOLD} {cur_prof.capitalize()}{C_RESET} ({desc})")
 
     _, inspect_out, _ = run_cmd(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"])
-    id_match = re.search(r"id:\s*(\d+)", inspect_out)
+    # wpctl inspect outputs "id 43, type..." at the very top.
+    id_match = re.search(r"id\s+(\d+)", inspect_out)
     def_sink = "Unknown"
 
     if id_match:
