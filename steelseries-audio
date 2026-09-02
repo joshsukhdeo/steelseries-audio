@@ -1,60 +1,58 @@
 #!/usr/bin/env python3
 """
-SteelSeries 7 (Arena 7) PipeWire & Bluetooth Audio Optimizer
-Author: Antigravity
-Provides optimal DSP acoustic filter-chain presets, SBC-XQ codec enforcement,
-channel/subwoofer diagnostics, and automated routing for SteelSeries 7 Bluetooth speakers.
+SteelSeries 7 (Arena 7) PipeWire & Bluetooth/USB Audio Optimizer
+Author: Antigravity / Refactored for Native WirePlumber Policy
+Provides optimal DSP acoustic filter-chain presets, dynamic USB/BT detection,
+channel/subwoofer diagnostics, and automated routing for SteelSeries Arena 7.
 """
 
 import argparse
 import json
-import os
 import re
-import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 CONFIG_DIR_PIPEWIRE = Path.home() / ".config" / "pipewire" / "pipewire.conf.d"
 CONFIG_DIR_WIREPLUMBER = Path.home() / ".config" / "wireplumber" / "wireplumber.conf.d"
 DSP_CONF_PATH = CONFIG_DIR_PIPEWIRE / "50-steelseries-arena7-dsp.conf"
 WP_CONF_PATH = CONFIG_DIR_WIREPLUMBER / "50-steelseries-arena7.conf"
 
-STEELSERIES_MAC = "28:9A:4B:B2:86:CC"
 DSP_SINK_NAME = "steelseries_arena7_dsp"
 
 PRESETS = {
     "audiophile": {
-        "description": "Balanced high-fidelity acoustic curve (deep bass extension, de-mudded mids, airy highs)",
+        "description": "Balanced high-fidelity acoustic curve",
         "l_sub": {"type": "bq_lowshelf", "freq": 60.0, "q": 0.9, "gain": 2.8},
         "l_mud": {"type": "bq_peaking", "freq": 260.0, "q": 1.4, "gain": -2.0},
         "l_vocal": {"type": "bq_peaking", "freq": 2500.0, "q": 1.2, "gain": 1.8},
         "l_air": {"type": "bq_highshelf", "freq": 10000.0, "q": 0.9, "gain": 1.5},
     },
     "gaming": {
-        "description": "Tactical gaming profile (enhanced spatial cues, footstep presence, punchy explosions)",
+        "description": "Tactical gaming profile",
         "l_sub": {"type": "bq_lowshelf", "freq": 65.0, "q": 1.0, "gain": 3.5},
         "l_mud": {"type": "bq_peaking", "freq": 300.0, "q": 1.5, "gain": -2.5},
         "l_vocal": {"type": "bq_peaking", "freq": 2200.0, "q": 1.1, "gain": 3.2},
         "l_air": {"type": "bq_highshelf", "freq": 8000.0, "q": 1.0, "gain": 2.2},
     },
     "cinema": {
-        "description": "Cinema & Movie profile (maximum subwoofer excursion, clear dialogue, wide immersion)",
+        "description": "Cinema & Movie profile",
         "l_sub": {"type": "bq_lowshelf", "freq": 50.0, "q": 0.8, "gain": 4.5},
         "l_mud": {"type": "bq_peaking", "freq": 240.0, "q": 1.3, "gain": -1.8},
         "l_vocal": {"type": "bq_peaking", "freq": 2000.0, "q": 1.2, "gain": 2.5},
         "l_air": {"type": "bq_highshelf", "freq": 11000.0, "q": 0.9, "gain": 2.0},
     },
     "bass-boost": {
-        "description": "Extreme bass emphasis (6.5\" subwoofer optimized low-end slam)",
+        "description": "Extreme bass emphasis",
         "l_sub": {"type": "bq_lowshelf", "freq": 55.0, "q": 0.9, "gain": 6.0},
         "l_mud": {"type": "bq_peaking", "freq": 250.0, "q": 1.4, "gain": -2.0},
         "l_vocal": {"type": "bq_peaking", "freq": 2800.0, "q": 1.0, "gain": 1.0},
         "l_air": {"type": "bq_highshelf", "freq": 9000.0, "q": 0.9, "gain": 1.0},
     },
     "voice": {
-        "description": "Vocal & Podcast clarity (sub-bass attenuation, aggressive speech boost)",
+        "description": "Vocal & Podcast clarity",
         "l_sub": {"type": "bq_highpass", "freq": 85.0, "q": 0.7, "gain": 0.0},
         "l_mud": {"type": "bq_peaking", "freq": 320.0, "q": 1.8, "gain": -3.0},
         "l_vocal": {"type": "bq_peaking", "freq": 2600.0, "q": 1.2, "gain": 4.0},
@@ -86,23 +84,57 @@ def run_cmd(cmd: List[str], check: bool = False) -> Tuple[int, str, str]:
     return res.returncode, res.stdout.strip(), res.stderr.strip()
 
 
+def get_pw_nodes():
+    ret, out, err = run_cmd(["pw-dump"])
+    if ret != 0:
+        return []
+    try:
+        return json.loads(out)
+    except:
+        return []
+
+
+def get_sinks():
+    nodes = get_pw_nodes()
+    physical_id, physical_name, connection_type = None, None, "None"
+    dsp_id, dsp_name = None, None
+
+    for n in nodes:
+        if n.get("type") == "PipeWire:Interface:Node":
+            info = n.get("info", {})
+            props = info.get("props", {})
+            name = props.get("node.name", "")
+            desc = props.get("node.description", "")
+            node_id = info.get("id", n.get("id"))
+
+            if name == DSP_SINK_NAME:
+                dsp_id = node_id
+                dsp_name = name
+            elif "Arena 7" in desc or "Arena_7" in name or "SteelSeries" in desc:
+                if name.startswith("alsa_output"):
+                    physical_id = node_id
+                    physical_name = name
+                    connection_type = "USB"
+                elif name.startswith("bluez_output"):
+                    physical_id = node_id
+                    physical_name = name
+                    connection_type = "Bluetooth"
+
+    return physical_id, physical_name, connection_type, dsp_id, dsp_name
+
+
 def get_current_profile_name() -> str:
     if not DSP_CONF_PATH.exists():
         return "none (uninstalled)"
     content = DSP_CONF_PATH.read_text()
     match = re.search(r"# Profile:\s*([a-zA-Z0-9_-]+)", content)
-    if match:
-        return match.group(1)
-    return "custom/audiophile"
+    return match.group(1) if match else "custom/audiophile"
 
 
 def generate_dsp_conf(profile_name: str) -> str:
     preset = PRESETS.get(profile_name, PRESETS["audiophile"])
     desc = preset["description"]
-    sub = preset["l_sub"]
-    mud = preset["l_mud"]
-    voc = preset["l_vocal"]
-    air = preset["l_air"]
+    sub, mud, voc, air = preset["l_sub"], preset["l_mud"], preset["l_vocal"], preset["l_air"]
 
     return f"""# SteelSeries Arena 7 PipeWire DSP Filter-Chain
 # Profile: {profile_name}
@@ -117,68 +149,22 @@ context.modules = [
             media.name       = "SteelSeries Arena 7 DSP"
             filter.graph = {{
                 nodes = [
-                    # Left Channel Filters
-                    {{
-                        type  = builtin
-                        name  = eq_l_sub
-                        label = {sub["type"]}
-                        control = {{ "Freq" = {sub["freq"]} "Q" = {sub["q"]} "Gain" = {sub["gain"]} }}
-                    }}
-                    {{
-                        type  = builtin
-                        name  = eq_l_mud
-                        label = {mud["type"]}
-                        control = {{ "Freq" = {mud["freq"]} "Q" = {mud["q"]} "Gain" = {mud["gain"]} }}
-                    }}
-                    {{
-                        type  = builtin
-                        name  = eq_l_vocal
-                        label = {voc["type"]}
-                        control = {{ "Freq" = {voc["freq"]} "Q" = {voc["q"]} "Gain" = {voc["gain"]} }}
-                    }}
-                    {{
-                        type  = builtin
-                        name  = eq_l_air
-                        label = {air["type"]}
-                        control = {{ "Freq" = {air["freq"]} "Q" = {air["q"]} "Gain" = {air["gain"]} }}
-                    }}
-
-                    # Right Channel Filters
-                    {{
-                        type  = builtin
-                        name  = eq_r_sub
-                        label = {sub["type"]}
-                        control = {{ "Freq" = {sub["freq"]} "Q" = {sub["q"]} "Gain" = {sub["gain"]} }}
-                    }}
-                    {{
-                        type  = builtin
-                        name  = eq_r_mud
-                        label = {mud["type"]}
-                        control = {{ "Freq" = {mud["freq"]} "Q" = {mud["q"]} "Gain" = {mud["gain"]} }}
-                    }}
-                    {{
-                        type  = builtin
-                        name  = eq_r_vocal
-                        label = {voc["type"]}
-                        control = {{ "Freq" = {voc["freq"]} "Q" = {voc["q"]} "Gain" = {voc["gain"]} }}
-                    }}
-                    {{
-                        type  = builtin
-                        name  = eq_r_air
-                        label = {air["type"]}
-                        control = {{ "Freq" = {air["freq"]} "Q" = {air["q"]} "Gain" = {air["gain"]} }}
-                    }}
+                    {{ type = builtin, name = eq_l_sub, label = {sub["type"]}, control = {{ "Freq" = {sub["freq"]} "Q" = {sub["q"]} "Gain" = {sub["gain"]} }} }}
+                    {{ type = builtin, name = eq_l_mud, label = {mud["type"]}, control = {{ "Freq" = {mud["freq"]} "Q" = {mud["q"]} "Gain" = {mud["gain"]} }} }}
+                    {{ type = builtin, name = eq_l_vocal, label = {voc["type"]}, control = {{ "Freq" = {voc["freq"]} "Q" = {voc["q"]} "Gain" = {voc["gain"]} }} }}
+                    {{ type = builtin, name = eq_l_air, label = {air["type"]}, control = {{ "Freq" = {air["freq"]} "Q" = {air["q"]} "Gain" = {air["gain"]} }} }}
+                    {{ type = builtin, name = eq_r_sub, label = {sub["type"]}, control = {{ "Freq" = {sub["freq"]} "Q" = {sub["q"]} "Gain" = {sub["gain"]} }} }}
+                    {{ type = builtin, name = eq_r_mud, label = {mud["type"]}, control = {{ "Freq" = {mud["freq"]} "Q" = {mud["q"]} "Gain" = {mud["gain"]} }} }}
+                    {{ type = builtin, name = eq_r_vocal, label = {voc["type"]}, control = {{ "Freq" = {voc["freq"]} "Q" = {voc["q"]} "Gain" = {voc["gain"]} }} }}
+                    {{ type = builtin, name = eq_r_air, label = {air["type"]}, control = {{ "Freq" = {air["freq"]} "Q" = {air["q"]} "Gain" = {air["gain"]} }} }}
                 ]
                 links = [
-                    # Left Channel Serial Links
-                    {{ output = "eq_l_sub:Out" input = "eq_l_mud:In" }}
-                    {{ output = "eq_l_mud:Out" input = "eq_l_vocal:In" }}
-                    {{ output = "eq_l_vocal:Out" input = "eq_l_air:In" }}
-
-                    # Right Channel Serial Links
-                    {{ output = "eq_r_sub:Out" input = "eq_r_mud:In" }}
-                    {{ output = "eq_r_mud:Out" input = "eq_r_vocal:In" }}
-                    {{ output = "eq_r_vocal:Out" input = "eq_r_air:In" }}
+                    {{ output = "eq_l_sub:Out", input = "eq_l_mud:In" }}
+                    {{ output = "eq_l_mud:Out", input = "eq_l_vocal:In" }}
+                    {{ output = "eq_l_vocal:Out", input = "eq_l_air:In" }}
+                    {{ output = "eq_r_sub:Out", input = "eq_r_mud:In" }}
+                    {{ output = "eq_r_mud:Out", input = "eq_r_vocal:In" }}
+                    {{ output = "eq_r_vocal:Out", input = "eq_r_air:In" }}
                 ]
                 inputs  = [ "eq_l_sub:In" "eq_r_sub:In" ]
                 outputs = [ "eq_l_air:Out" "eq_r_air:Out" ]
@@ -204,8 +190,8 @@ context.modules = [
 
 
 def generate_wp_conf() -> str:
-    return """# WirePlumber configuration for SteelSeries Arena 7 / Series 7 Bluetooth Speaker
-# Enables SBC-XQ Dual-Channel high-bitpool codec, sets speaker form factor, prevents idle suspend
+    return """# WirePlumber configuration for SteelSeries Arena 7 / Series 7
+# Enables SBC-XQ High-Bitpool codec for BT, sets speaker form factor universally
 
 monitor.bluez.properties = {
   bluez5.enable-sbc-xq = true
@@ -215,40 +201,16 @@ monitor.bluez.properties = {
 
 device.profile.priority.rules = [
   {
-    matches = [
-      {
-        device.name = "~bluez_card.*"
-      }
-    ]
-    actions = {
-      update-props = {
-        priorities = [
-          "a2dp-sink-sbc_xq"
-          "a2dp-sink-ldac"
-          "a2dp-sink-aptx_hd"
-          "a2dp-sink-aptx"
-          "a2dp-sink-aac"
-          "a2dp-sink"
-        ]
-      }
-    }
+    matches = [ { device.name = "~bluez_card.*" } ]
+    actions = { update-props = { priorities = [ "a2dp-sink-sbc_xq", "a2dp-sink-ldac", "a2dp-sink-aptx_hd", "a2dp-sink" ] } }
   }
 ]
 
 monitor.bluez.rules = [
   {
     matches = [
-      {
-        device.name = "~bluez_card.*"
-        device.alias = "~SteelSeries.*"
-      }
-      {
-        device.name = "~bluez_card.*"
-        device.description = "~SteelSeries.*"
-      }
-      {
-        device.name = "bluez_card.28_9A_4B_B2_86_CC"
-      }
+      { device.name = "~bluez_card.*", device.alias = "~.*Arena 7.*" },
+      { device.name = "~bluez_card.*", device.description = "~.*Arena 7.*" }
     ]
     actions = {
       update-props = {
@@ -258,25 +220,12 @@ monitor.bluez.rules = [
         bluez5.profile = "a2dp-sink-sbc_xq"
       }
     }
-  }
+  },
   {
-    matches = [
-      {
-        node.name = "~bluez_output.*"
-        node.description = "~SteelSeries.*"
-      }
-      {
-        node.name = "~bluez_output.*"
-        device.alias = "~SteelSeries.*"
-      }
-      {
-        node.name = "~bluez_output.28_9A_4B_B2_86_CC.*"
-      }
-    ]
+    matches = [ { node.name = "~bluez_output.*", node.description = "~.*Arena 7.*" } ]
     actions = {
       update-props = {
         node.description = "SteelSeries Arena 7 (SBC-XQ)"
-        node.nick = "SteelSeries Arena 7"
         priority.driver = 1500
         priority.session = 1500
         session.suspend-timeout-seconds = 0
@@ -292,82 +241,97 @@ def cmd_install(profile: str = "audiophile") -> None:
     CONFIG_DIR_PIPEWIRE.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR_WIREPLUMBER.mkdir(parents=True, exist_ok=True)
 
-    # Remove old broken/legacy filter-chain if present
-    legacy_conf = CONFIG_DIR_PIPEWIRE / "2.1-lfe.conf"
-    if legacy_conf.exists():
-        legacy_conf.unlink()
-        print(f"  {C_YELLOW}Removed obsolete 2.1-lfe.conf{C_RESET}")
-
-    # Write WirePlumber configuration
     WP_CONF_PATH.write_text(generate_wp_conf())
     print(f"  {C_GREEN}✓ Written:{C_RESET} {WP_CONF_PATH}")
 
-    # Write PipeWire DSP configuration
     DSP_CONF_PATH.write_text(generate_dsp_conf(profile))
     print(f"  {C_GREEN}✓ Written:{C_RESET} {DSP_CONF_PATH} (Profile: {profile})")
 
-    # Restart PipeWire & WirePlumber
     cmd_restart()
     cmd_sbc_xq()
-    cmd_set_default("dsp")
+    
+    phys_id, _, _, dsp_id, _ = get_sinks()
+    if dsp_id:
+        cmd_set_default("dsp")
     print(f"{C_GREEN}{C_BOLD}Installation complete and active!{C_RESET}")
 
 
 def cmd_restart() -> None:
     print(f"{C_CYAN}Restarting PipeWire & WirePlumber services...{C_RESET}")
     run_cmd(["systemctl", "--user", "restart", "pipewire", "wireplumber"])
-    run_cmd(["sleep", "1"])
-    print(f"{C_GREEN}✓ Services restarted successfully.{C_RESET}")
+    
+    # Poll graph up to 5 seconds to prevent race conditions during DSP routing
+    for _ in range(20):
+        time.sleep(0.25)
+        _, _, _, dsp_id, _ = get_sinks()
+        if dsp_id:
+            print(f"{C_GREEN}✓ Services restarted and DSP graph confirmed.{C_RESET}")
+            return
+    print(f"{C_YELLOW}⚠ Services restarted, but DSP graph took too long to resolve.{C_RESET}")
 
 
 def cmd_profile(profile_name: str) -> None:
     profile_name = profile_name.lower()
     if profile_name not in PRESETS:
         print(f"{C_RED}Error: Unknown profile '{profile_name}'.{C_RESET}")
-        print(f"Available profiles: {', '.join(PRESETS.keys())}")
         sys.exit(1)
 
     print(f"{C_CYAN}Switching DSP Profile to: {C_BOLD}{profile_name.capitalize()}{C_RESET}")
     DSP_CONF_PATH.parent.mkdir(parents=True, exist_ok=True)
     DSP_CONF_PATH.write_text(generate_dsp_conf(profile_name))
     run_cmd(["systemctl", "--user", "restart", "pipewire"])
-    run_cmd(["sleep", "0.5"])
+    time.sleep(0.5)
     print(f"{C_GREEN}✓ Profile '{profile_name}' applied: {PRESETS[profile_name]['description']}{C_RESET}")
 
 
 def cmd_sbc_xq() -> None:
     print(f"{C_CYAN}Enforcing SBC-XQ High-Bitpool Bluetooth profile...{C_RESET}")
-    _, cards_out, _ = run_cmd(["pactl", "list", "cards"])
-    card_match = re.search(r"Name:\s*(bluez_card\.[a-zA-Z0-9_]+)", cards_out)
-    if card_match:
-        card_name = card_match.group(1)
+    ret, cards_out, _ = run_cmd(["pactl", "list", "cards"])
+    card_name = None
+    for block in cards_out.split("Card #"):
+        if "Arena 7" in block and "bluez_card" in block:
+            match = re.search(r"Name:\s*(bluez_card\.[a-zA-Z0-9_]+)", block)
+            if match:
+                card_name = match.group(1)
+                break
+
+    if card_name:
         ret, _, err = run_cmd(["pactl", "set-card-profile", card_name, "a2dp-sink-sbc_xq"])
         if ret == 0:
             print(f"  {C_GREEN}✓ Successfully switched {card_name} to SBC-XQ!{C_RESET}")
-            return
         else:
             print(f"  {C_YELLOW}Notice: {err}{C_RESET}")
     else:
-        print(f"  {C_YELLOW}Bluetooth device not connected right now.{C_RESET}")
+        print(f"  {C_YELLOW}Bluetooth card not detected. Skipping BlueZ profile injection.{C_RESET}")
 
 
 def cmd_set_default(target: str) -> None:
-    if target == "dsp":
-        sink_name = DSP_SINK_NAME
-        display_name = "SteelSeries Arena 7 (Pro DSP)"
-    elif target == "direct":
-        sink_name = f"bluez_output.{STEELSERIES_MAC.replace(':', '_')}.1"
-        display_name = "SteelSeries Arena 7 (Direct SBC-XQ)"
-    else:
-        sink_name = target
-        display_name = target
+    phys_id, phys_name, conn_type, dsp_id, dsp_name = get_sinks()
 
-    print(f"{C_CYAN}Setting default sink to: {C_BOLD}{display_name}{C_RESET}")
-    ret, _, err = run_cmd(["pactl", "set-default-sink", sink_name])
-    if ret == 0:
-        print(f"  {C_GREEN}✓ Default sink set to {sink_name}{C_RESET}")
+    if target == "dsp":
+        if not dsp_id:
+            print(f"{C_RED}Error: DSP sink not found in PipeWire graph. Is it installed?{C_RESET}")
+            sys.exit(1)
+            
+        target_id = dsp_id
+        display = "SteelSeries Arena 7 (Pro DSP Virtual Node)"
+    elif target == "direct":
+        if not phys_id:
+            print(f"{C_RED}Error: Physical Arena 7 ({conn_type}) not found in PipeWire graph.{C_RESET}")
+            sys.exit(1)
+            
+        target_id = phys_id
+        display = f"SteelSeries Arena 7 (Direct {conn_type})"
     else:
-        print(f"  {C_YELLOW}Notice: {err}{C_RESET}")
+        print(f"{C_RED}Error: Target must be 'dsp' or 'direct'{C_RESET}")
+        sys.exit(1)
+
+    print(f"{C_CYAN}Routing default sink to: {C_BOLD}{display}{C_RESET} [Node: {target_id}]")
+    ret, _, err = run_cmd(["wpctl", "set-default", str(target_id)])
+    if ret == 0:
+        print(f"  {C_GREEN}✓ Default sink locked natively via WirePlumber.{C_RESET}")
+    else:
+        print(f"  {C_RED}Error via wpctl: {err}{C_RESET}")
 
 
 def cmd_test() -> None:
@@ -383,98 +347,67 @@ def cmd_test() -> None:
 
 def cmd_status() -> None:
     print(f"{C_CYAN}{C_BOLD}=== SteelSeries 7 Audio Status ==={C_RESET}")
+    phys_id, phys_name, conn_type, dsp_id, dsp_name = get_sinks()
 
-    # Bluetooth device check
-    _, bt_info, _ = run_cmd(["bluetoothctl", "info", STEELSERIES_MAC])
-    is_connected = "Connected: yes" in bt_info
-
-    if is_connected:
-        print(f"  Bluetooth Status:   {C_GREEN}● Connected{C_RESET} ({STEELSERIES_MAC})")
+    if conn_type == "None":
+        print(f"  Connection:       {C_RED}○ Disconnected (Neither USB nor BT found){C_RESET}")
     else:
-        print(f"  Bluetooth Status:   {C_RED}○ Disconnected{C_RESET} ({STEELSERIES_MAC})")
+        print(f"  Connection:       {C_GREEN}● Active ({conn_type}){C_RESET} [Node: {phys_id}]")
 
-    # Card & Codec check
-    _, cards_out, _ = run_cmd(["pactl", "list", "cards"])
-    card_name = f"bluez_card.{STEELSERIES_MAC.replace(':', '_')}"
-    active_profile = "unknown"
-
-    if card_name in cards_out:
-        card_blocks = cards_out.split("Card #")
-        for block in card_blocks:
-            if card_name in block:
+    if conn_type == "Bluetooth":
+        _, cards_out, _ = run_cmd(["pactl", "list", "cards"])
+        active_profile = "unknown"
+        for block in cards_out.split("Card #"):
+            if "Arena 7" in block and "bluez_card" in block:
                 match = re.search(r"Active Profile:\s*([^\n]+)", block)
                 if match:
                     active_profile = match.group(1).strip()
                 break
 
-    if "sbc_xq" in active_profile:
-        codec_display = f"{C_GREEN}{C_BOLD}SBC-XQ (Dual-Channel High-Bitpool ~551 kbps){C_RESET}"
-    elif "sbc" in active_profile:
-        codec_display = f"{C_YELLOW}SBC Standard (Low Bitpool){C_RESET}"
-    else:
-        codec_display = active_profile
+        if "sbc_xq" in active_profile:
+            codec_display = f"{C_GREEN}{C_BOLD}SBC-XQ (Dual-Channel High-Bitpool){C_RESET}"
+        else:
+            codec_display = f"{C_YELLOW}{active_profile}{C_RESET}"
+        print(f"  Active BT Codec:  {codec_display}")
+    elif conn_type == "USB":
+        print(f"  Active DAC:       {C_GREEN}{C_BOLD}PCM Direct ALSA (USB Lossless){C_RESET}")
 
-    print(f"  Active BT Codec:    {codec_display}")
-
-    # DSP Profile
     cur_prof = get_current_profile_name()
     desc = PRESETS.get(cur_prof, {}).get("description", "Custom curve")
-    print(f"  Active DSP Preset:  {C_MAGENTA}{C_BOLD}{cur_prof.capitalize()}{C_RESET} ({desc})")
+    print(f"  Active DSP Preset:{C_MAGENTA}{C_BOLD} {cur_prof.capitalize()}{C_RESET} ({desc})")
 
-    # Default sink check
-    _, info_out, _ = run_cmd(["pactl", "info"])
-    match_sink = re.search(r"Default Sink:\s*([^\n]+)", info_out)
-    def_sink = match_sink.group(1).strip() if match_sink else "unknown"
+    _, info_out, _ = run_cmd(["wpctl", "status"])
+    def_sink = "Unknown"
+    for line in info_out.split("\n"):
+        if "*" in line and "Audio" not in line and "Video" not in line and "Sink" not in line:
+            if str(dsp_id) in line:
+                def_sink = f"{C_GREEN}{C_BOLD}SteelSeries Pro DSP Sink (Active){C_RESET}"
+            elif str(phys_id) in line:
+                def_sink = f"{C_CYAN}Direct {conn_type} Sink{C_RESET}"
+            break
 
-    if def_sink == DSP_SINK_NAME:
-        print(f"  System Default:     {C_GREEN}{C_BOLD}SteelSeries Pro DSP Sink (Active){C_RESET}")
-    elif "bluez_output" in def_sink:
-        print(f"  System Default:     {C_CYAN}Direct Bluetooth Sink{C_RESET}")
-    else:
-        print(f"  System Default:     {C_YELLOW}{def_sink}{C_RESET}")
-
-    # Volume check
-    _, sinks_out, _ = run_cmd(["pactl", "list", "sinks"])
-    sink_blocks = sinks_out.split("Sink #")
-    for block in sink_blocks:
-        if DSP_SINK_NAME in block or f"bluez_output.{STEELSERIES_MAC.replace(':', '_')}" in block:
-            match_vol = re.search(r"Volume:[^\n]+/\s*([0-9]+%)[^\n]+Mute:\s*([a-z]+)", block)
-            if match_vol:
-                vol = match_vol.group(1)
-                muted = match_vol.group(2)
-                s_name = "DSP Sink" if DSP_SINK_NAME in block else "Direct BT Sink"
-                print(f"  {s_name} Volume:     {vol} (Muted: {muted})")
-
+    print(f"  System Default:   {def_sink}")
     print(f"=================================")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="SteelSeries 7 (Arena 7) PipeWire & Bluetooth Audio Suite",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Profiles:
-  audiophile   High-fidelity balanced curve (deep punchy sub, clear vocals, silk highs)
-  gaming       Tactical curve (amplified footsteps, spatial clarity, punchy explosions)
-  cinema       Movie curve (maximum sub excursion, clear dialogue, wide soundstage)
-  bass-boost   Maximum sub-bass slam for EDM / Bass-heavy genres
-  voice        Podcast / Communication clarity curve
-  flat         Neutral transparent reference curve
-        """,
+        description="SteelSeries 7 (Arena 7) PipeWire Audio Suite",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("status", help="Show connection, codec, and DSP status")
-    subparsers.add_parser("install", help="Install & configure PipeWire & WirePlumber optimizations")
-    subparsers.add_parser("restart", help="Restart PipeWire and WirePlumber services")
-    subparsers.add_parser("sbc-xq", help="Force SBC-XQ High-Bitpool codec mode")
-    subparsers.add_parser("test", help="Run channel & subwoofer sweep diagnostic test")
+    subparsers.add_parser("status")
+    subparsers.add_parser("install")
+    subparsers.add_parser("restart")
+    subparsers.add_parser("sbc-xq")
+    subparsers.add_parser("test")
 
-    prof_parser = subparsers.add_parser("profile", help="Switch DSP acoustic profile")
-    prof_parser.add_argument("name", choices=list(PRESETS.keys()), help="Profile name")
+    prof_parser = subparsers.add_parser("profile")
+    prof_parser.add_argument("name", choices=list(PRESETS.keys()))
 
-    def_parser = subparsers.add_parser("set-default", help="Set default audio sink")
-    def_parser.add_argument("target", choices=["dsp", "direct"], help="Target sink ('dsp' or 'direct')")
+    def_parser = subparsers.add_parser("set-default")
+    def_parser.add_argument("target", choices=["dsp", "direct"])
 
     args = parser.parse_args()
 
