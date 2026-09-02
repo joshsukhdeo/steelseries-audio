@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SteelSeries 7 (Arena 7) PipeWire & Bluetooth/USB Audio Optimizer
-Author: Antigravity / Refactored for Native WirePlumber Policy
+Author: Antigravity / Refactored for Cross-Distro Native WirePlumber Policy
 Provides optimal DSP acoustic filter-chain presets, dynamic USB/BT detection,
 channel/subwoofer diagnostics, and automated routing for SteelSeries Arena 7.
 """
@@ -9,6 +9,7 @@ channel/subwoofer diagnostics, and automated routing for SteelSeries Arena 7.
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -75,6 +76,20 @@ C_GREEN = "\033[32m"
 C_YELLOW = "\033[33m"
 C_RED = "\033[31m"
 C_MAGENTA = "\033[35m"
+
+
+def check_dependencies() -> None:
+    missing = []
+    required_cmds = ["wpctl", "pw-dump", "pactl", "bluetoothctl", "speaker-test"]
+    for cmd in required_cmds:
+        if shutil.which(cmd) is None:
+            missing.append(cmd)
+    
+    if missing:
+        print(f"{C_RED}Error: Missing required CLI tools: {', '.join(missing)}{C_RESET}")
+        print(f"{C_YELLOW}Arch Linux:{C_RESET} sudo pacman -S wireplumber pipewire-pulse bluez-utils alsa-utils")
+        print(f"{C_YELLOW}Ubuntu:{C_RESET} sudo apt install wireplumber pipewire-pulse bluez alsa-utils")
+        sys.exit(1)
 
 
 def run_cmd(cmd: List[str], check: bool = False) -> Tuple[int, str, str]:
@@ -210,7 +225,9 @@ monitor.bluez.rules = [
   {
     matches = [
       { device.name = "~bluez_card.*", device.alias = "~.*Arena 7.*" },
-      { device.name = "~bluez_card.*", device.description = "~.*Arena 7.*" }
+      { device.name = "~bluez_card.*", device.description = "~.*Arena 7.*" },
+      { device.name = "~bluez_card.*", device.alias = "~.*SteelSeries.*" },
+      { device.name = "~bluez_card.*", device.description = "~.*SteelSeries.*" }
     ]
     actions = {
       update-props = {
@@ -222,7 +239,10 @@ monitor.bluez.rules = [
     }
   },
   {
-    matches = [ { node.name = "~bluez_output.*", node.description = "~.*Arena 7.*" } ]
+    matches = [ 
+        { node.name = "~bluez_output.*", node.description = "~.*Arena 7.*" },
+        { node.name = "~bluez_output.*", node.description = "~.*SteelSeries.*" }
+    ]
     actions = {
       update-props = {
         node.description = "SteelSeries Arena 7 (SBC-XQ)"
@@ -289,7 +309,7 @@ def cmd_sbc_xq() -> None:
     ret, cards_out, _ = run_cmd(["pactl", "list", "cards"])
     card_name = None
     for block in cards_out.split("Card #"):
-        if "Arena 7" in block and "bluez_card" in block:
+        if ("Arena 7" in block or "SteelSeries" in block) and "bluez_card" in block:
             match = re.search(r"Name:\s*(bluez_card\.[a-zA-Z0-9_]+)", block)
             if match:
                 card_name = match.group(1)
@@ -358,7 +378,7 @@ def cmd_status() -> None:
         _, cards_out, _ = run_cmd(["pactl", "list", "cards"])
         active_profile = "unknown"
         for block in cards_out.split("Card #"):
-            if "Arena 7" in block and "bluez_card" in block:
+            if ("Arena 7" in block or "SteelSeries" in block) and "bluez_card" in block:
                 match = re.search(r"Active Profile:\s*([^\n]+)", block)
                 if match:
                     active_profile = match.group(1).strip()
@@ -376,7 +396,7 @@ def cmd_status() -> None:
     desc = PRESETS.get(cur_prof, {}).get("description", "Custom curve")
     print(f"  Active DSP Preset:{C_MAGENTA}{C_BOLD} {cur_prof.capitalize()}{C_RESET} ({desc})")
 
-# Default sink check (Optimized)
+    # Native wpctl dynamic default sink inspection
     _, inspect_out, _ = run_cmd(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"])
     id_match = re.search(r"id:\s*(\d+)", inspect_out)
     def_sink = "Unknown"
@@ -389,11 +409,14 @@ def cmd_status() -> None:
             def_sink = f"{C_CYAN}Direct {conn_type} Sink{C_RESET}"
         else:
             def_sink = f"{C_YELLOW}Other Device [Node: {active_id}]{C_RESET}"
+
     print(f"  System Default:   {def_sink}")
     print(f"=================================")
 
 
 def main() -> None:
+    check_dependencies()
+    
     parser = argparse.ArgumentParser(
         description="SteelSeries 7 (Arena 7) PipeWire Audio Suite",
         formatter_class=argparse.RawDescriptionHelpFormatter
