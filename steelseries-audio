@@ -326,36 +326,40 @@ def cmd_restart() -> None:
 
 
 def cmd_profile(profile_name: str) -> None:
-        profile_name = profile_name.lower()
-        if profile_name not in PRESETS:
-            print(f"{C_RED}Error: Unknown profile '{profile_name}'.{C_RESET}")
-            sys.exit(1)
+            profile_name = profile_name.lower()
+            if profile_name not in PRESETS:
+                print(f"{C_RED}Error: Unknown profile '{profile_name}'.{C_RESET}")
+                sys.exit(1)
 
-        print(f"{C_CYAN}Switching DSP Profile to: {C_BOLD}{profile_name.capitalize()}{C_RESET}")
-        DSP_CONF_PATH.parent.mkdir(parents=True, exist_ok=True)
-        DSP_CONF_PATH.write_text(generate_dsp_conf(profile_name))
+            print(f"{C_CYAN}Dynamic Audio Morph: Applying {C_BOLD}{profile_name.capitalize()}{C_RESET} via pw-cli...")
 
-        # Run a clean userspace service restart
-        run_cmd(["systemctl", "--user", "restart", "pipewire", "wireplumber"])
+            # 1. Update the background config file so it persists across reboots
+            DSP_CONF_PATH.parent.mkdir(parents=True, exist_ok=True)
+            DSP_CONF_PATH.write_text(generate_dsp_conf(profile_name))
 
-        # Poll the graph for up to 5 seconds to let the virtual node initialize
-        dsp_id = None
-        for _ in range(20):
-            time.sleep(0.25)
-            _, _, _, found_dsp_id, _ = get_sinks()
-            if found_dsp_id:
-                dsp_id = found_dsp_id
-                break
+            # 2. Extract the new preset values
+            preset = PRESETS[profile_name]
+            sub, mud, voc, air = preset["l_sub"], preset["l_mud"], preset["l_vocal"], preset["l_air"]
 
-        if dsp_id:
-            # Enforce WirePlumber default sink routing natively
-            run_cmd(["wpctl", "set-default", str(dsp_id)])
-            print(f"  {C_GREEN}✓ Native system target locked back onto Pro DSP [Node: {dsp_id}]{C_RESET}")
-        else:
-            print(f"  {C_YELLOW}⚠ Profile written, but virtual sink took too long to re-index.{C_RESET}")
+            # 3. Direct runtime control injection via pw-cli commands
+            # This edits the active nodes running in memory instantly without a service restart!
+            commands = [
+                f"set-param {DSP_SINK_NAME} Props {{ control = [ "
+                f"{{ node = eq_l_sub property = Freq value = {sub['freq']} }} {{ node = eq_l_sub property = Q value = {sub['q']} }} {{ node = eq_l_sub property = Gain value = {sub['gain']} }} "
+                f"{{ node = eq_l_mud property = Freq value = {mud['freq']} }} {{ node = eq_l_mud property = Q value = {mud['q']} }} {{ node = eq_l_mud property = Gain value = {mud['gain']} }} "
+                f"{{ node = eq_l_vocal property = Freq value = {voc['freq']} }} {{ node = eq_l_vocal property = Q value = {voc['q']} }} {{ node = eq_l_vocal property = Gain value = {voc['gain']} }} "
+                f"{{ node = eq_l_air property = Freq value = {air['freq']} }} {{ node = eq_l_air property = Q value = {air['q']} }} {{ node = eq_l_air property = Gain value = {air['gain']} }} "
+                f"{{ node = eq_r_sub property = Freq value = {sub['freq']} }} {{ node = eq_r_sub property = Q value = {sub['q']} }} {{ node = eq_r_sub property = Gain value = {sub['gain']} }} "
+                f"{{ node = eq_r_mud property = Freq value = {mud['freq']} }} {{ node = eq_r_mud property = Q value = {mud['q']} }} {{ node = eq_r_mud property = Gain value = {mud['gain']} }} "
+                f"{{ node = eq_r_vocal property = Freq value = {voc['freq']} }} {{ node = eq_r_vocal property = Q value = {voc['q']} }} {{ node = eq_r_vocal property = Gain value = {voc['gain']} }} "
+                f"{{ node = eq_r_air property = Freq value = {air['freq']} }} {{ node = eq_r_air property = Q value = {air['q']} }} {{ node = eq_r_air property = Gain value = {air['gain']} }} "
+                f"] }}"
+            ]
 
-        print(f"{C_GREEN}✓ Profile '{profile_name}' applied: {PRESETS[profile_name]['description']}{C_RESET}")
+            for cmd in commands:
+                subprocess.run(["pw-cli", "-e", cmd], capture_output=True)
 
+            print(f"{C_GREEN}✓ Live DSP Parameters updated instantly: {preset['description']}{C_RESET}")
 
 
 def cmd_sbc_xq() -> None:
