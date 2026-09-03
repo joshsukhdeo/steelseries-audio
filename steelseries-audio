@@ -95,6 +95,13 @@ PRESETS = {
         "l_vocal": {"type": "bq_peaking", "freq": 2000.0, "q": 1.1, "gain": 2.5}, # Crisp lyrical delivery for old-school masters
         "l_air": {"type": "bq_highshelf", "freq": 10000.0, "q": 1.2, "gain": -1.0},# Smooths out harsh tape hiss on old source recordings
     },
+    "sludge-prog": {
+        "description": "Massive wall-of-sound warmth for Sludge, Doom, and Atmospheric Prog Metal",
+        "l_sub": {"type": "bq_lowshelf", "freq": 60.0, "q": 0.85, "gain": 3.5},   # Heavy, driving low-end foundation
+        "l_mud": {"type": "bq_peaking", "freq": 280.0, "q": 1.1, "gain": 1.2},     # Preserves raw guitar growl and warm room tones
+        "l_vocal": {"type": "bq_peaking", "freq": 3000.0, "q": 1.2, "gain": -1.5}, # Smooths out harsh guitar frequencies to prevent ear fatigue
+        "l_air": {"type": "bq_highshelf", "freq": 8500.0, "q": 1.0, "gain": 2.0},  # Brings forward atmospheric keys and layered guest vocals
+    },
 }
 
 # ANSI colors
