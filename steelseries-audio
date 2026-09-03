@@ -326,7 +326,7 @@ def cmd_sbc_xq() -> None:
                     break
         if card_name:
             break
-        time.sleep(0.5) # Wait 500ms before next poll
+        time.sleep(0.5)
 
     if card_name:
         ret, _, err = run_cmd(["pactl", "set-card-profile", card_name, "a2dp-sink-sbc_xq"])
@@ -379,9 +379,11 @@ def cmd_test() -> None:
 
 
 def cmd_completions() -> None:
-    print(f"{C_CYAN}Installing native Bash completions...{C_RESET}")
-
+    print(f"{C_CYAN}Installing native Bash & Zsh completions...{C_RESET}")
+    
     profiles_str = " ".join(PRESETS.keys())
+    
+    # ---------------- BASH COMPLETION ----------------
     bash_script = f"""_steelseries_audio_complete() {{
     local cur prev
     cur="${{COMP_WORDS[COMP_CWORD]}}"
@@ -405,17 +407,64 @@ def cmd_completions() -> None:
 }}
 complete -F _steelseries_audio_complete steelseries-audio
 """
+    comp_dir_bash = Path.home() / ".local" / "share" / "bash-completion" / "completions"
+    comp_dir_bash.mkdir(parents=True, exist_ok=True)
+    comp_file_bash = comp_dir_bash / "steelseries-audio"
+    comp_file_bash.write_text(bash_script)
+    print(f"  {C_GREEN}✓ Bash script written:{C_RESET} {comp_file_bash}")
 
-    comp_dir = Path.home() / ".local" / "share" / "bash-completion" / "completions"
-    comp_dir.mkdir(parents=True, exist_ok=True)
-    comp_file = comp_dir / "steelseries-audio"
+    # ---------------- ZSH COMPLETION ----------------
+    zsh_script = f"""#compdef steelseries-audio
 
-    comp_file.write_text(bash_script)
+_steelseries_audio() {{
+    local line state
+    _arguments -C \\
+        "1: :->cmds" \\
+        "*::arg:->args"
 
-    print(f"  {C_GREEN}✓ Written:{C_RESET} {comp_file}")
-    print(f"{C_GREEN}{C_BOLD}Completions successfully deployed!{C_RESET}")
-    print(f"{C_YELLOW}Restart your terminal or run this command to activate them now:{C_RESET}")
-    print(f"  source {comp_file}")
+    case "$state" in
+        cmds)
+            local commands=(
+                "status:Show connection, codec, and DSP status"
+                "install:Install & configure optimizations"
+                "restart:Restart services"
+                "sbc-xq:Force SBC-XQ codec"
+                "test:Run channel test"
+                "completions:Install shell completions"
+                "profile:Switch DSP acoustic profile"
+                "set-default:Set default audio sink"
+            )
+            _describe -t commands 'steelseries-audio command' commands
+            ;;
+        args)
+            case $line[1] in
+                profile)
+                    local profiles=({profiles_str})
+                    _describe -t profiles 'profile' profiles
+                    ;;
+                set-default)
+                    local targets=(dsp direct)
+                    _describe -t targets 'target' targets
+                    ;;
+            esac
+            ;;
+    esac
+}}
+
+_steelseries_audio "$@"
+"""
+    comp_dir_zsh = Path.home() / ".local" / "share" / "zsh" / "site-functions"
+    comp_dir_zsh.mkdir(parents=True, exist_ok=True)
+    comp_file_zsh = comp_dir_zsh / "_steelseries_audio"
+    comp_file_zsh.write_text(zsh_script)
+    print(f"  {C_GREEN}✓ Zsh script written:{C_RESET}  {comp_file_zsh}")
+
+    print(f"\n{C_GREEN}{C_BOLD}Completions successfully deployed!{C_RESET}")
+    print(f"{C_YELLOW}For Bash, restart your terminal or run:{C_RESET}")
+    print(f"  source {comp_file_bash}")
+    print(f"{C_YELLOW}For Zsh, add this to your ~/.zshrc if not already present, then restart terminal:{C_RESET}")
+    print(f"  fpath=(~/.local/share/zsh/site-functions $fpath)")
+    print(f"  autoload -U compinit && compinit")
 
 
 def cmd_status() -> None:
@@ -450,7 +499,6 @@ def cmd_status() -> None:
     print(f"  Active DSP Preset:{C_MAGENTA}{C_BOLD} {cur_prof.capitalize()}{C_RESET} ({desc})")
 
     _, inspect_out, _ = run_cmd(["wpctl", "inspect", "@DEFAULT_AUDIO_SINK@"])
-    # wpctl inspect outputs "id 43, type..." at the very top.
     id_match = re.search(r"id\s+(\d+)", inspect_out)
     def_sink = "Unknown"
 
