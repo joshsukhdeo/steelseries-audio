@@ -241,21 +241,19 @@ context.modules = [
 
 
 def generate_wp_conf(device_name: str="SteelSeries Arena 7") -> str:
+    latency_rules = ""
+    if device_name == "SteelSeries Arena 7":
+        latency_rules = """
+        node.force-quantum = 4096
+        node.latency = "4096/48000"""
+
     return f"""# WirePlumber configuration for {device_name}
-# Enables SBC-XQ High-Bitpool codec for BT, sets speaker form factor universally
 
 monitor.bluez.properties = {{
   bluez5.enable-sbc-xq = true
   bluez5.enable-msbc = true
   bluez5.codecs = [ sbc_xq aac ldac aptx aptx_hd sbc ]
 }}
-
-device.profile.priority.rules = [
-  {{
-    matches = [ {{ device.name = "~bluez_card.*" }} ]
-    actions = {{ update-props = {{ priorities = [ "a2dp-sink-sbc_xq", "a2dp-sink-ldac", "a2dp-sink-aptx_hd", "a2dp-sink" ] }} }}
-  }}
-]
 
 monitor.bluez.rules = [
   {{
@@ -265,10 +263,9 @@ monitor.bluez.rules = [
     ]
     actions = {{
       update-props = {{
-        device.form-factor = "speaker"
-        device.icon_name = "audio-speakers"
+        device.form-factor = "headset"
+        device.icon_name = "audio-headset"
         bluez5.auto-connect = [ a2dp_sink ]
-        bluez5.profile = "a2dp-sink-sbc_xq"
       }}
     }}
   }},
@@ -278,18 +275,15 @@ monitor.bluez.rules = [
     ]
     actions = {{
       update-props = {{
-        node.description = "{device_name} (SBC-XQ)"
+        node.description = "{device_name} (Optimized)"
         priority.driver = 1500
         priority.session = 1500
-        session.suspend-timeout-seconds = 0
-        node.force-quantum = 4096
-        node.latency = "4096/48000"
+        session.suspend-timeout-seconds = 0{latency_rules}
       }}
     }}
   }}
 ]
 """
-
 
 def cmd_install(profile: str = "audiophile", device_name: str = "SteelSeries Arena 7") -> None:
     print(f"{C_CYAN}{C_BOLD}Installing SteelSeries 7 PipeWire & WirePlumber configurations...{C_RESET}")
@@ -303,7 +297,8 @@ def cmd_install(profile: str = "audiophile", device_name: str = "SteelSeries Are
     print(f"  {C_GREEN}✓ Written:{C_RESET} {DSP_CONF_PATH} (Profile: {profile})")
 
     cmd_restart(device_name)
-    cmd_sbc_xq(device_name)
+    if device_name == "SteelSeries Arena 7":
+        cmd_sbc_xq(device_name)
 
     phys_id, _, _, dsp_id, _ = get_sinks(device_name)
     if dsp_id:
