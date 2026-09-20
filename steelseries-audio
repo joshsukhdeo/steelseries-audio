@@ -434,6 +434,11 @@ def cmd_completions() -> None:
     cur="${{COMP_WORDS[COMP_CWORD]}}"
     prev="${{COMP_WORDS[COMP_CWORD-1]}}"
 
+    if [[ ${{COMP_CWORD}} -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "status install restart sbc-xq test profile set-default completions" -- "${{cur}}") )
+        return 0
+    fi
+
     case "${{prev}}" in
         profile)
             COMPREPLY=( $(compgen -W "{profiles_str}" -- "${{cur}}") )
@@ -453,9 +458,6 @@ def cmd_completions() -> None:
         return 0
     fi
 
-    if [[ ${{COMP_CWORD}} -eq 1 ]] || [[ ${{prev}} == "-d" ]] || [[ ${{prev}} == "--device" ]]; then
-        COMPREPLY=( $(compgen -W "status install restart sbc-xq test profile set-default completions" -- "${{cur}}") )
-    fi
     return 0
 }}
 complete -F _steelseries_audio_complete steelseries-audio
@@ -577,20 +579,22 @@ def main() -> None:
         description="SteelSeries 7 (Arena 7) PipeWire Audio Suite",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("-d", "--device", default="SteelSeries Arena 7", help="Target device name (default: SteelSeries Arena 7)")
+    base_parser = argparse.ArgumentParser(add_help=False)
+    base_parser.add_argument("-d", "--device", default="SteelSeries Arena 7", help="Target device name (default: SteelSeries Arena 7)")
+    
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("status")
-    subparsers.add_parser("install")
-    subparsers.add_parser("restart")
-    subparsers.add_parser("sbc-xq")
-    subparsers.add_parser("test")
-    subparsers.add_parser("completions")
+    subparsers.add_parser("status", parents=[base_parser])
+    subparsers.add_parser("install", parents=[base_parser])
+    subparsers.add_parser("restart", parents=[base_parser])
+    subparsers.add_parser("sbc-xq", parents=[base_parser])
+    subparsers.add_parser("test", parents=[base_parser])
+    subparsers.add_parser("completions", parents=[base_parser])
 
-    prof_parser = subparsers.add_parser("profile")
+    prof_parser = subparsers.add_parser("profile", parents=[base_parser])
     prof_parser.add_argument("name", choices=list(PRESETS.keys()))
 
-    def_parser = subparsers.add_parser("set-default")
+    def_parser = subparsers.add_parser("set-default", parents=[base_parser])
     def_parser.add_argument("target", choices=["dsp", "direct"])
 
     try:
